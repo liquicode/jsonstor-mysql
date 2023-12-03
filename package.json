@@ -1,0 +1,36 @@
+{
+	"name": "@liquicode/jsonstor-mysql",
+	"version": "0.0.1",
+	"description": "A jsonstor adapter which stores documents in a MySql database.",
+	"license": "MIT",
+	"homepage": "http://jsonstor.liquicode.com",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/liquicode/jsonstor-mysql"
+	},
+	"authors": [
+		{
+			"name": "Andre' G. Bowlin",
+			"email": "agbowlin@gmail.com",
+			"homepage": "http://liquicode.com"
+		}
+	],
+	"main": "src/jsonstor-mysql.js",
+	"scripts": {
+		"test": "mocha -u bdd test/*.js --timeout 0 --slow 10 --colors",
+		"publish version": "npx @liquicode/devops --tasks .\\build\\devops.tasks.js publish_version",
+		"start new version": "npx @liquicode/devops --tasks .\\build\\devops.tasks.js start_new_version"
+	},
+	"keywords": [
+		"jsonstor",
+		"mysql",
+		"mysql server"
+	],
+	"devDependencies": {
+		"mocha": "^10.2.0"
+	},
+	"dependencies": {
+		"@liquicode/jsonstor": "",
+		"mysql": "^2.18.1"
+	}
+}
