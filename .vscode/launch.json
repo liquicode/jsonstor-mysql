@@ -38,7 +38,7 @@
 			"args": [
 				"-u",
 				"bdd",
-				"test/~dev-tests.js",
+				"test/~dev-tests/*.js",
 				"--timeout",
 				"0",
 				"--slow",

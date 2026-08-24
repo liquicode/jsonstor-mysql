@@ -3,9 +3,9 @@
 const LIB_FS = require( 'fs' );
 const LIB_PATH = require( 'path' );
 
-const jsongin = require( '@liquicode/jsongin' )();
-const MYSQL = require( 'mysql' );
-const Project = require( '@liquicode/jsongin/src/jsongin/Project' );
+const jsongin = require( '@liquicode/jsongin' );
+// const MYSQL = require( 'mysql' );
+const MYSQL = require( 'mysql2' );
 
 
 module.exports = {
@@ -222,7 +222,8 @@ module.exports = {
 			}
 			catch ( error )
 			{
-				if ( error.message.startsWith( `ER_NO_SUCH_TABLE` ) ) { return Storage.Catalog; }
+				if ( error.message.startsWith( `ER_NO_SUCH_TABLE` ) ) { return Storage.Catalog; } // mysql1
+				if ( error.code === 'ER_NO_SUCH_TABLE' ) { return Storage.Catalog; } // mysql2
 				throw error;
 			}
 
@@ -248,11 +249,11 @@ module.exports = {
 					field.type_name = 'DOUBLE';
 					field.short_type = 'n';
 				}
-				else if ( field.type === MySqlFieldTypes.JSON ) 
-				{
-					field.type_name = 'JSON';
-					field.short_type = 'o';
-				}
+				// else if ( field.type === MySqlFieldTypes.JSON ) 
+				// {
+				// 	field.type_name = 'JSON';
+				// 	field.short_type = 'o';
+				// }
 				else if ( field.type === MySqlFieldTypes.MEDIUMTEXT ) 
 				{
 					field.type_name = 'MEDIUMTEXT';
@@ -288,7 +289,7 @@ module.exports = {
 			if ( !Storage.Catalog.table_exists )
 			{
 				if ( !Storage.Catalog.id_field ) { Storage.Catalog.id_field = '_id'; }
-				let sql = `CREATE TABLE ??.?? (?? INT(11) NOT NULL AUTO_INCREMENT, PRIMARY KEY (??))`;
+				let sql = `CREATE TABLE ??.?? (?? INT(11) NOT NULL AUTO_INCREMENT, PRIMARY KEY (??));`;
 				let sql_parameters = [
 					Storage.Settings.Database,
 					Storage.Settings.Table,
@@ -327,16 +328,20 @@ module.exports = {
 							expr += 'MEDIUMTEXT';
 							break;
 						case 'l':
-							expr += 'JSON';
+							// expr += 'JSON';
+							expr += 'MEDIUMTEXT';
 							break;
 						case 'o':
-							expr += 'JSON';
+							// expr += 'JSON';
+							expr += 'MEDIUMTEXT';
 							break;
 						case 'a':
-							expr += 'JSON';
+							// expr += 'JSON';
+							expr += 'MEDIUMTEXT';
 							break;
 						case 'r':
-							expr += 'JSON';
+							// expr += 'JSON';
+							expr += 'MEDIUMTEXT';
 							break;
 						default:
 							continue;
@@ -553,7 +558,7 @@ module.exports = {
 		{
 			try
 			{
-				let sql = `DROP TABLE ??.??`;
+				let sql = `DROP TABLE IF EXISTS ??.??;`;
 				let sql_parameters = [ Storage.Settings.Database, Storage.Settings.Table ];
 				await SQL_Passthrough( sql, sql_parameters );
 				Storage.Catalog.initialized = false;
@@ -684,6 +689,35 @@ module.exports = {
 						documents[ index ] = jsongin.Project( documents[ index ], Projection );
 					}
 				}
+				return documents;
+			}
+			else 
+			{
+				return documents.length;
+			}
+			return; // Unreachable code.
+		};
+
+
+		//=====================================================================
+		// FindMany2
+		//=====================================================================
+
+
+		Storage.FindMany2 = async function FindMany2( Criteria, Projection, Sort, MaxCount, Options = {} ) 
+		{
+			let documents = await SQL_Query( Criteria, 0 );
+			if ( Options.ReturnDocuments ) 
+			{
+				if ( Projection )
+				{
+					for ( let index = 0; index < documents.length; index++ )
+					{
+						documents[ index ] = jsongin.Project( documents[ index ], Projection );
+					}
+				}
+				if ( Sort ) { documents = jsongin.Sort( documents, Sort ); }
+				if ( MaxCount && ( MaxCount > 0 ) && ( documents.length > MaxCount ) ) { documents = documents.splice( 0, MaxCount ); }
 				return documents;
 			}
 			else 

@@ -1,6 +1,6 @@
 {
 	"name": "@liquicode/jsonstor-mysql",
-	"version": "0.0.1",
+	"version": "0.0.20",
 	"description": "A jsonstor adapter which stores documents in a MySql database.",
 	"license": "MIT",
 	"homepage": "http://jsonstor.liquicode.com",
@@ -24,13 +24,20 @@
 	"keywords": [
 		"jsonstor",
 		"mysql",
-		"mysql server"
+		"mysql server",
+		"mongo query"
 	],
 	"devDependencies": {
-		"mocha": "^10.2.0"
+        "@liquicode/devops": "^0.0.21",
+        "@liquicode/jsonstor-docs": "^0.1.0",
+        "mocha": "^10.2.0",
+        "webpack": "^5.89.0",
+        "webpack-cli": "^5.1.4",
+        "webpack-node-externals": "^3.0.0"
 	},
 	"dependencies": {
-		"@liquicode/jsonstor": "",
-		"mysql": "^2.18.1"
+        "@liquicode/jsongin": "^0.1.0",
+        "@liquicode/jsonstor": "^0.1.0",
+		"mysql2": "^3.6.5"
 	}
 }
