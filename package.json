@@ -1,6 +1,6 @@
 {
 	"name": "@liquicode/jsonstor-mysql",
-	"version": "0.0.20",
+	"version": "0.1.0",
 	"description": "A jsonstor adapter which stores documents in a MySql database.",
 	"license": "MIT",
 	"homepage": "http://jsonstor.liquicode.com",

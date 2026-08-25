@@ -65,6 +65,7 @@ module.exports = {
 
 		//=====================================================================
 		let MySqlFieldTypes = {
+			TINY: 1,
 			INT: 3,
 			DOUBLE: 5,
 			JSON: 245,
@@ -239,7 +240,15 @@ module.exports = {
 				field.allow_null = !has_flag( field.flags, MySqlFieldFlags.NOT_NULL_FLAG );
 				field.is_primary_key = has_flag( field.flags, MySqlFieldFlags.PRI_KEY_FLAG );
 				field.is_auto_increment = has_flag( field.flags, MySqlFieldFlags.AUTO_INCREMENT_FLAG );
-				if ( field.type === MySqlFieldTypes.INT ) 
+				if ( field.type === MySqlFieldTypes.TINY ) 
+				{
+					// update_table_schema writes a boolean as TINYINT(1). Typing it as anything
+					// else costs the round trip: the driver hands back 1 and 0, and a criteria
+					// asking for a strict true then matches nothing.
+					field.type_name = 'TINYINT';
+					field.short_type = 'b';
+				}
+				else if ( field.type === MySqlFieldTypes.INT ) 
 				{
 					field.type_name = 'INT';
 					field.short_type = 'n';
@@ -365,8 +374,34 @@ module.exports = {
 
 
 		//=====================================================================
+		function row_to_document( Row )
+		{
+			// The driver reports a TINYINT as a number, so a boolean column comes back as 1
+			// or 0 and stops being strictly equal to true or false. The catalog knows which
+			// columns were written as booleans, so the round trip is closed here, in the one
+			// place a row becomes a document.
+			if ( !Row ) { return null; }
+			for ( let key in Row )
+			{
+				let field = Storage.Catalog.fields[ key ];
+				if ( !field ) { continue; }
+				if ( field.short_type !== 'b' ) { continue; }
+				if ( Row[ key ] === null ) { continue; }
+				Row[ key ] = ( Row[ key ] ? true : false );
+			}
+			return jsongin.Unhybridize( Row );
+		}
+
+
+		//=====================================================================
 		async function SQL_Query( Criteria, MaxDocs = 0 )
 		{
+			// A malformed criteria is refused, not answered - the same rule the built in
+			// adapters apply. Without it a criteria of the wrong type reached SqlExpression
+			// and came back as an empty clause, which reads as "match everything".
+			let st_criteria = jsongin.ShortType( Criteria );
+			if ( !'olu'.includes( st_criteria ) ) { throw new Error( `Criteria must be an object, null, or undefined.` ); }
+
 			// Convert criteria to an sql expression.
 			let sql_expression_options = {
 				StringLiteralQuotes: '"',
@@ -395,7 +430,7 @@ module.exports = {
 			let filtered = [];
 			for ( let index = 0; index < documents.length; index++ )
 			{
-				let document = jsongin.Unhybridize( documents[ index ] );
+				let document = row_to_document( documents[ index ] );
 				if ( jsongin.Query( document, Criteria ) )
 				{
 					filtered.push( document );
@@ -429,6 +464,12 @@ module.exports = {
 			for ( let key in hybrid )
 			{
 				if ( key.includes( '.' ) ) { continue; }
+				// A value SQL has no form for - a function, an undefined, a symbol - is given no
+				// column by update_table_schema, so it cannot be named in the column list either.
+				// Naming it made the whole insert fail with "Unknown column", which the Rainbow
+				// suite's before() swallowed, leaving every one of its tests to run against an
+				// empty table.
+				if ( !Storage.Catalog.fields[ key ] ) { continue; }
 				tokens.push( '??' );
 				columns.push( key );
 				sql_parameters.push( key );
@@ -464,7 +505,7 @@ module.exports = {
 			if ( !documents ) { return null; }
 			if ( !documents.length ) { return null; }
 
-			let document = jsongin.Unhybridize( documents[ 0 ] );
+			let document = row_to_document( documents[ 0 ] );
 			return document;
 		}
 
@@ -518,7 +559,7 @@ module.exports = {
 			if ( !documents ) { return null; }
 			if ( !documents.length ) { return null; }
 
-			let document = jsongin.Unhybridize( documents[ 0 ] );
+			let document = row_to_document( documents[ 0 ] );
 			return document;
 		}
 
@@ -654,21 +695,16 @@ module.exports = {
 
 		Storage.FindOne = async function FindOne( Criteria, Projection, Options = {} ) 
 		{
+			// A read returns documents. ReturnDocuments gates what a *write* hands back, which
+			// is how the built in adapters read: their FindOne, FindMany and FindMany2 never
+			// consult it. Gating here handed a count to every caller which omitted Options.
 			let documents = await SQL_Query( Criteria, 1 );
-			if ( Options.ReturnDocuments ) 
+			if ( !documents.length ) { return null; }
+			if ( Projection )
 			{
-				if ( !documents.length ) { return null; }
-				if ( Projection )
-				{
-					documents[ 0 ] = jsongin.Project( documents[ 0 ], Projection );
-				}
-				return documents[ 0 ];
+				documents[ 0 ] = jsongin.Project( documents[ 0 ], Projection );
 			}
-			else 
-			{
-				return documents.length;
-			}
-			return; // Unreachable code.
+			return documents[ 0 ];
 		};
 
 
@@ -679,23 +715,16 @@ module.exports = {
 
 		Storage.FindMany = async function FindMany( Criteria, Projection, Options = {} ) 
 		{
+			// A read returns documents. See the note on FindOne.
 			let documents = await SQL_Query( Criteria, 0 );
-			if ( Options.ReturnDocuments ) 
+			if ( Projection )
 			{
-				if ( Projection )
+				for ( let index = 0; index < documents.length; index++ )
 				{
-					for ( let index = 0; index < documents.length; index++ )
-					{
-						documents[ index ] = jsongin.Project( documents[ index ], Projection );
-					}
+					documents[ index ] = jsongin.Project( documents[ index ], Projection );
 				}
-				return documents;
 			}
-			else 
-			{
-				return documents.length;
-			}
-			return; // Unreachable code.
+			return documents;
 		};
 
 
@@ -706,25 +735,18 @@ module.exports = {
 
 		Storage.FindMany2 = async function FindMany2( Criteria, Projection, Sort, MaxCount, Options = {} ) 
 		{
+			// A read returns documents. See the note on FindOne.
 			let documents = await SQL_Query( Criteria, 0 );
-			if ( Options.ReturnDocuments ) 
+			if ( Projection )
 			{
-				if ( Projection )
+				for ( let index = 0; index < documents.length; index++ )
 				{
-					for ( let index = 0; index < documents.length; index++ )
-					{
-						documents[ index ] = jsongin.Project( documents[ index ], Projection );
-					}
+					documents[ index ] = jsongin.Project( documents[ index ], Projection );
 				}
-				if ( Sort ) { documents = jsongin.Sort( documents, Sort ); }
-				if ( MaxCount && ( MaxCount > 0 ) && ( documents.length > MaxCount ) ) { documents = documents.splice( 0, MaxCount ); }
-				return documents;
 			}
-			else 
-			{
-				return documents.length;
-			}
-			return; // Unreachable code.
+			if ( Sort ) { documents = jsongin.Sort( documents, Sort ); }
+			if ( MaxCount && ( MaxCount > 0 ) && ( documents.length > MaxCount ) ) { documents = documents.splice( 0, MaxCount ); }
+			return documents;
 		};
 
 
