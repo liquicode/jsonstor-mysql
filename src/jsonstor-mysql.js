@@ -2,6 +2,7 @@
 
 const LIB_FS = require( 'fs' );
 const LIB_PATH = require( 'path' );
+const LIB_CRYPTO = require( 'crypto' );
 
 const jsongin = require( '@liquicode/jsongin' );
 // const MYSQL = require( 'mysql' );
@@ -27,6 +28,12 @@ module.exports = {
 		if ( jsongin.ShortType( Settings.UserName ) !== 's' ) { throw new Error( `This adapter requires a Settings.UserName string parameter.` ); }
 		if ( jsongin.ShortType( Settings.Password ) !== 's' ) { throw new Error( `This adapter requires a Settings.Password string parameter.` ); }
 		if ( jsongin.ShortType( Settings.ModifySchema ) !== 'b' ) { Settings.ModifySchema = false; }
+		// The storage model. See jsonx/.plans/sql-adapter-architecture.md - real columns are an
+		// index which pre-filters, and the payload column carries the document. With no payload
+		// column the table *is* the document, and a field with no column is refused by name.
+		if ( jsongin.ShortType( Settings.PayloadColumn ) !== 's' ) { Settings.PayloadColumn = ''; }
+		if ( jsongin.ShortType( Settings.PayloadSync ) !== 'b' ) { Settings.PayloadSync = false; }
+		if ( jsongin.ShortType( Settings.Columns ) !== 'a' ) { Settings.Columns = []; }
 
 
 		//=====================================================================
@@ -61,6 +68,26 @@ module.exports = {
 			UNIQUE_FLAG: 65536, // Intern: Used by sql_yacc. More...
 			BINCMP_FLAG: 131072, // Intern: Used by sql_yacc. More...
 		};
+
+
+		//=====================================================================
+		// The primary key this adapter creates when it creates a table. A VARCHAR rather than an
+		// auto-increment integer, because the caller's _id is taken as given here the way it is
+		// in every other adapter, and jsongin's _id is a uuid string.
+		const DEFAULT_ID_FIELD = '_id';
+		const DEFAULT_ID_TYPE = 'VARCHAR(64) NOT NULL';
+
+		// ***Insertion order is part of the storage contract*** - A) CRUD Tests asserts that a
+		// collection reads back in the order it was written, and jsonstor-folder was fixed for
+		// exactly this. An auto-increment key used to provide it for free; a VARCHAR _id does
+		// not, so the order is kept in a column of its own.
+		const DEFAULT_SEQ_FIELD = '_seq';
+
+		// ***Not MySQL's native JSON type.*** JSON normalizes an object on the way in - it sorts
+		// the keys - so { b, n, s, l, o, a } comes back { a, b, l, n, o, s } and a strict equality
+		// against a whole object fails. Measured against MySQL 8.0.41. LONGTEXT returns the bytes
+		// which were written, which is what a payload holding the document has to do.
+		const PAYLOAD_TYPE = 'LONGTEXT DEFAULT NULL';
 
 
 		//=====================================================================
@@ -258,12 +285,14 @@ module.exports = {
 					field.type_name = 'DOUBLE';
 					field.short_type = 'n';
 				}
-				// else if ( field.type === MySqlFieldTypes.JSON ) 
-				// {
-				// 	field.type_name = 'JSON';
-				// 	field.short_type = 'o';
-				// }
-				else if ( field.type === MySqlFieldTypes.MEDIUMTEXT ) 
+				else if ( field.type === MySqlFieldTypes.JSON )
+				{
+					// 'j' is deliberately outside the 'bns' set SQL_Query pre-filters on. A JSON
+					// column holds a structure, and a structure is jsongin's question, not SQL's.
+					field.type_name = 'JSON';
+					field.short_type = 'j';
+				}
+				else if ( field.type === MySqlFieldTypes.MEDIUMTEXT )
 				{
 					field.type_name = 'MEDIUMTEXT';
 					field.short_type = 's';
@@ -280,10 +309,38 @@ module.exports = {
 				}
 				// Set the field definition.
 				Storage.Catalog.fields[ field.name ] = field;
-				if ( !Storage.Catalog.id_field && field.is_auto_increment )
+			}
+
+			// ***The order matters, because this adapter now creates two keys.*** A table it
+			// created has a VARCHAR _id holding the caller's identifier and an auto-increment
+			// _seq holding insertion order, and taking the first auto-increment column would
+			// pick the wrong one. A configured IdField wins, then _id by name, and only then
+			// a foreign table's auto-increment key.
+			if ( !Storage.Catalog.id_field && Storage.Catalog.fields[ DEFAULT_ID_FIELD ] )
+			{
+				Storage.Catalog.id_field = DEFAULT_ID_FIELD;
+			}
+			if ( !Storage.Catalog.id_field )
+			{
+				for ( let key in Storage.Catalog.fields )
 				{
-					Storage.Catalog.id_field = field.name;
+					if ( key === DEFAULT_SEQ_FIELD ) { continue; }
+					if ( !Storage.Catalog.fields[ key ].is_auto_increment ) { continue; }
+					Storage.Catalog.id_field = key;
+					break;
 				}
+			}
+
+			// Insertion order. Only present in a table this adapter created.
+			Storage.Catalog.seq_field =
+				Storage.Catalog.fields[ DEFAULT_SEQ_FIELD ] ? DEFAULT_SEQ_FIELD : null;
+
+			// The payload column, if this storage was configured with one and the table has it.
+			Storage.Catalog.payload_field = null;
+			if ( Storage.Settings.PayloadColumn )
+			{
+				Storage.Catalog.payload_field =
+					Storage.Catalog.fields[ Storage.Settings.PayloadColumn ] || null;
 			}
 
 			return Storage.Catalog;
@@ -291,105 +348,253 @@ module.exports = {
 
 
 		//=====================================================================
-		async function update_table_schema( Document )
+		// ensure_schema
+		//
+		// ***jsonstor never infers a column from a document.*** Columns come from the Columns
+		// declaration when this adapter creates the table, or from the table as it was found.
+		// Nothing else. See jsonx/.plans/sql-adapter-architecture.md, rule R2.
+		//
+		// What this replaced took a column's SQL type from the *first document* which held that
+		// field, so the schema was an accident of insertion order and every later document with
+		// a different type for that field was coerced into it without complaint. A string
+		// zipCode made the column MEDIUMTEXT and the numbers which followed came back as
+		// strings, which no test could see and nothing recorded.
+		//=====================================================================
+		async function ensure_schema()
 		{
 			if ( !Storage.Catalog.initialized ) { await update_catalog(); }
+			if ( !Storage.Settings.ModifySchema ) { return; }
+
+			let changed = false;
 
 			if ( !Storage.Catalog.table_exists )
 			{
-				if ( !Storage.Catalog.id_field ) { Storage.Catalog.id_field = '_id'; }
-				let sql = `CREATE TABLE ??.?? (?? INT(11) NOT NULL AUTO_INCREMENT, PRIMARY KEY (??));`;
+				let id_column = declared_id_column();
+				// The auto-increment column has to be a key of its own for MySQL to accept it,
+				// and a UNIQUE key is enough.
+				let sql = `CREATE TABLE ??.?? (?? ${id_column.Type}, ?? BIGINT NOT NULL AUTO_INCREMENT, PRIMARY KEY (??), UNIQUE KEY (??));`;
 				let sql_parameters = [
 					Storage.Settings.Database,
 					Storage.Settings.Table,
-					Storage.Catalog.id_field,
-					Storage.Catalog.id_field ];
+					id_column.Name,
+					DEFAULT_SEQ_FIELD,
+					id_column.Name,
+					DEFAULT_SEQ_FIELD ];
 				await SQL_Passthrough( sql, sql_parameters );
 				Storage.Catalog.initialized = false;
 				await update_catalog();
+				changed = true;
 			}
 
-			let sql = `ALTER TABLE ??.?? `;
-			let sql_parameters = [ Storage.Settings.Database, Storage.Settings.Table ];
-
-			let count = 0;
-			if ( !Storage.Catalog.id_field )
+			// Every declared column which is not there yet, then the payload column. Declared
+			// columns carry their SQL type verbatim: this is a SQL adapter, and a caller who
+			// names a table also names its types.
+			let additions = [];
+			let addition_parameters = [];
+			for ( let index = 0; index < Storage.Settings.Columns.length; index++ )
 			{
-				sql += 'ADD COLUMN _id INT(11) NOT NULL AUTO_INCREMENT';
-				count++;
-				Storage.Catalog.id_field = '_id';
+				let column = Storage.Settings.Columns[ index ];
+				if ( jsongin.ShortType( column ) !== 'o' ) { continue; }
+				if ( jsongin.ShortType( column.Name ) !== 's' ) { continue; }
+				if ( !column.Name ) { continue; }
+				if ( column.Key ) { continue; }
+				if ( Storage.Catalog.fields[ column.Name ] ) { continue; }
+				let type = ( jsongin.ShortType( column.Type ) === 's' ) ? column.Type : 'MEDIUMTEXT DEFAULT NULL';
+				additions.push( `ADD COLUMN ?? ${type}` );
+				addition_parameters.push( column.Name );
+			}
+			if ( Storage.Settings.PayloadColumn && !Storage.Catalog.fields[ Storage.Settings.PayloadColumn ] )
+			{
+				additions.push( `ADD COLUMN ?? ${PAYLOAD_TYPE}` );
+				addition_parameters.push( Storage.Settings.PayloadColumn );
 			}
 
+			if ( additions.length )
+			{
+				let sql = `ALTER TABLE ??.?? ` + additions.join( ', ' );
+				let sql_parameters = [ Storage.Settings.Database, Storage.Settings.Table ]
+					.concat( addition_parameters );
+				await SQL_Passthrough( sql, sql_parameters );
+				changed = true;
+			}
+
+			if ( changed )
+			{
+				Storage.Catalog.initialized = false;
+				await update_catalog();
+			}
+			return;
+		}
+
+
+		//=====================================================================
+		// The primary key column this adapter creates.
+		//
+		// ***A VARCHAR key rather than an auto-increment one.*** Every other adapter in this
+		// family takes the caller's _id as given, and an INT AUTO_INCREMENT key answers a
+		// caller-supplied UUID with "Data truncated for column '_id'". A foreign table's
+		// auto-increment key is still discovered and still used; this is only what gets created.
+		function declared_id_column()
+		{
+			for ( let index = 0; index < Storage.Settings.Columns.length; index++ )
+			{
+				let column = Storage.Settings.Columns[ index ];
+				if ( jsongin.ShortType( column ) !== 'o' ) { continue; }
+				if ( !column.Key ) { continue; }
+				if ( jsongin.ShortType( column.Name ) !== 's' ) { continue; }
+				if ( !column.Name ) { continue; }
+				let type = ( jsongin.ShortType( column.Type ) === 's' ) ? column.Type : DEFAULT_ID_TYPE;
+				return { Name: column.Name, Type: type };
+			}
+			let name = Storage.Settings.IdField || DEFAULT_ID_FIELD;
+			return { Name: name, Type: DEFAULT_ID_TYPE };
+		}
+
+
+		//=====================================================================
+		// Whether a column can hold this value without changing it.
+		//
+		// ***The question is the round trip, not whether the server will accept it.*** MySQL
+		// takes a number into a MEDIUMTEXT column happily and hands back a string, and there is
+		// nothing in the row afterwards which says a number was meant.
+		function value_fits_column( Field, Value )
+		{
+			let st = jsongin.ShortType( Value );
+			if ( !'bns'.includes( st ) ) { return false; }
+			return ( Field.short_type === st );
+		}
+
+
+		//=====================================================================
+		function parse_payload( Value )
+		{
+			// The driver parses a JSON column and hands back a string for a TEXT one.
+			if ( ( Value === null ) || ( typeof Value === 'undefined' ) ) { return {}; }
+			if ( typeof Value === 'string' )
+			{
+				if ( !Value ) { return {}; }
+				return JSON.parse( Value );
+			}
+			return Value;
+		}
+
+
+		//=====================================================================
+		function serialize_payload( Value )
+		{
+			return JSON.stringify( Value );
+		}
+
+
+		//=====================================================================
+		// document_to_row
+		//
+		// Splits a document into the columns which pre-filter and the payload which stores it,
+		// according to the three configurations in the architecture document.
+		function document_to_row( Document )
+		{
+			let payload_name = Storage.Settings.PayloadColumn;
+			let has_payload = ( Storage.Catalog.payload_field !== null );
+			let row = {};
+
+			if ( has_payload && Storage.Settings.PayloadSync )
+			{
+				// F3. The payload is the whole document and the columns are projections of it,
+				// each holding the value when it fits and NULL when it does not. Reads never
+				// take a value from a column, so a NULL here costs a pre-filter and not an
+				// answer - SqlExpression broadens a projected column for exactly that reason.
+				for ( let key in Storage.Catalog.fields )
+				{
+					if ( key === payload_name ) { continue; }
+					let field = Storage.Catalog.fields[ key ];
+					if ( field.is_auto_increment ) { continue; }
+					if ( key === Storage.Catalog.id_field ) { continue; }
+					let value = Document[ key ];
+					row[ key ] = value_fits_column( field, value ) ? value : null;
+				}
+				row[ payload_name ] = serialize_payload( Document );
+				return row;
+			}
+
+			let remainder = {};
 			for ( let key in Document )
 			{
-				if ( !Storage.Catalog.fields[ key ] )
+				if ( key.includes( '.' ) ) { continue; }
+				if ( key === payload_name )
 				{
-					let expr = 'ADD COLUMN ?? ';
-					switch ( jsongin.ShortType( Document[ key ] ) )
-					{
-						case 'b':
-							expr += 'TINYINT(1)';
-							break;
-						case 'n':
-							expr += 'DOUBLE';
-							break;
-						case 's':
-							expr += 'MEDIUMTEXT';
-							break;
-						case 'l':
-							// expr += 'JSON';
-							expr += 'MEDIUMTEXT';
-							break;
-						case 'o':
-							// expr += 'JSON';
-							expr += 'MEDIUMTEXT';
-							break;
-						case 'a':
-							// expr += 'JSON';
-							expr += 'MEDIUMTEXT';
-							break;
-						case 'r':
-							// expr += 'JSON';
-							expr += 'MEDIUMTEXT';
-							break;
-						default:
-							continue;
-							break; // Unreachable code.
-					}
-					expr += ' DEFAULT NULL';
-					if ( count ) { sql += ', '; }
-					sql += expr;
-					sql_parameters.push( key );
-					count++;
+					throw new Error( `Cannot store a field named [${key}], it is this storage's payload column.` );
 				}
+				let value = Document[ key ];
+				let field = Storage.Catalog.fields[ key ];
+				if ( !field )
+				{
+					// F1. A field with no column is refused rather than dropped. What this
+					// replaced skipped the key and reported success, so the field was gone and
+					// nothing said so.
+					if ( !has_payload )
+					{
+						throw new Error( `Cannot store the field [${key}], the table [${Storage.Settings.Table}] has no such column and this storage has no payload column.` );
+					}
+					remainder[ key ] = value;
+					continue;
+				}
+				if ( field.is_auto_increment ) { continue; }
+				if ( key === Storage.Catalog.id_field ) { continue; }
+				if ( jsongin.ShortType( value ) === 'l' ) { row[ key ] = null; continue; }
+				if ( !value_fits_column( field, value ) )
+				{
+					// F2. The column is the only home this field has, so a value it cannot hold
+					// is refused rather than coerced into a lie.
+					throw new Error( `Cannot store the field [${key}], its value does not fit the column's type [${field.type_name}]. Configure a PayloadColumn to store values of any type.` );
+				}
+				row[ key ] = value;
 			}
-			if ( !count ) { return; }
-
-			let results = await SQL_Passthrough( sql, sql_parameters );
-
-			Storage.Catalog.initialized = false;
-			await update_catalog();
-			return;
+			if ( has_payload ) { row[ payload_name ] = serialize_payload( remainder ); }
+			return row;
 		}
 
 
 		//=====================================================================
 		function row_to_document( Row )
 		{
-			// The driver reports a TINYINT as a number, so a boolean column comes back as 1
-			// or 0 and stops being strictly equal to true or false. The catalog knows which
-			// columns were written as booleans, so the round trip is closed here, in the one
-			// place a row becomes a document.
 			if ( !Row ) { return null; }
+			let payload_name = Storage.Settings.PayloadColumn;
+			let has_payload = ( Storage.Catalog.payload_field !== null );
+
+			// F3. Under PayloadSync the payload is the document and the columns are projections
+			// of it, so a value is never taken from a column. That is the whole reason this
+			// configuration keeps absent apart from null and a number apart from its string:
+			// the payload is real JSON and a column is not.
+			if ( has_payload && Storage.Settings.PayloadSync )
+			{
+				return parse_payload( Row[ payload_name ] );
+			}
+
+			// The columns are the document here, so the round trip is only as good as they are.
+			// The driver reports a TINYINT as a number, so a boolean column comes back as 1 or 0
+			// and stops being strictly equal to true or false. The catalog knows which columns
+			// were written as booleans, so that much is closed here, in the one place a row
+			// becomes a document.
+			let document = {};
 			for ( let key in Row )
 			{
+				if ( has_payload && ( key === payload_name ) ) { continue; }
+				if ( key === Storage.Catalog.seq_field ) { continue; }
+				let value = Row[ key ];
 				let field = Storage.Catalog.fields[ key ];
-				if ( !field ) { continue; }
-				if ( field.short_type !== 'b' ) { continue; }
-				if ( Row[ key ] === null ) { continue; }
-				Row[ key ] = ( Row[ key ] ? true : false );
+				if ( field && ( field.short_type === 'b' ) && ( value !== null ) )
+				{
+					value = ( value ? true : false );
+				}
+				document[ key ] = value;
 			}
-			return jsongin.Unhybridize( Row );
+			document = jsongin.Unhybridize( document );
+			if ( has_payload )
+			{
+				let remainder = parse_payload( Row[ payload_name ] );
+				for ( let key in remainder ) { document[ key ] = remainder[ key ]; }
+			}
+			return document;
 		}
 
 
@@ -408,12 +613,23 @@ module.exports = {
 				IdentifierQuotes: '`',
 				AllowedFields: {},
 			};
+			let payload_sync = ( Storage.Catalog.payload_field !== null ) && Storage.Settings.PayloadSync;
 			for ( let key in Storage.Catalog.fields )
 			{
 				let field = Storage.Catalog.fields[ key ];
 				if ( field.is_auto_increment ) { continue; }
+				if ( key === Storage.Settings.PayloadColumn ) { continue; }
+				if ( key === Storage.Catalog.seq_field ) { continue; }
 				if ( !'bns'.includes( field.short_type ) ) { continue; }
-				sql_expression_options.AllowedFields[ key ] = field;
+				// ***The key column is left out under PayloadSync.*** It holds String( _id ), so
+				// an ordering criteria on a numeric _id would compare "10" against "5" as text
+				// and lose rows. The by-id paths build their own WHERE and still use the index.
+				if ( payload_sync && ( key === Storage.Catalog.id_field ) ) { continue; }
+				let entry = jsongin.Clone( field );
+				// F4. A projected column mirrors the payload and holds NULL where the value did
+				// not fit, so every predicate on it is broadened with IS NULL.
+				entry.is_projection = payload_sync;
+				sql_expression_options.AllowedFields[ key ] = entry;
 			}
 			let sql_expr = jsonstor.SqlExpression( Criteria, sql_expression_options );
 
@@ -421,6 +637,14 @@ module.exports = {
 			let sql = `SELECT * FROM ??.??`;
 			let sql_parameters = [ Storage.Settings.Database, Storage.Settings.Table ];
 			if ( sql_expr ) { sql += ' WHERE ' + sql_expr; }
+			// ***A listing is not sorted unless it says so.*** readdirSync taught this to
+			// jsonstor-folder; a SELECT with no ORDER BY is the same promise, which is to say
+			// none. Only a table this adapter created has the column to order by.
+			if ( Storage.Catalog.seq_field )
+			{
+				sql += ' ORDER BY ??';
+				sql_parameters.push( Storage.Catalog.seq_field );
+			}
 
 			// Get results.
 			let results = await SQL_Passthrough( sql, sql_parameters );
@@ -444,60 +668,84 @@ module.exports = {
 
 
 		//=====================================================================
+		// The value which goes in the key column.
+		//
+		// The payload carries the true _id with its true type; this is only what the index
+		// holds. A VARCHAR key takes String() because that is what MySQL would do anyway, and
+		// doing it here keeps the by-id statements comparing like with like.
+		function id_to_key( Value )
+		{
+			if ( ( Value === null ) || ( typeof Value === 'undefined' ) ) { return null; }
+			let field = Storage.Catalog.fields[ Storage.Catalog.id_field ];
+			if ( field && 'n'.includes( field.short_type ) ) { return Value; }
+			return '' + Value;
+		}
+
+
+		//=====================================================================
+		function new_id()
+		{
+			// jsongin's _id is a uuid string, and the built in adapters mint one with uuid.v4()
+			// when a document arrives without it. randomUUID is the same value from the runtime,
+			// which keeps this adapter's dependencies to its driver.
+			return LIB_CRYPTO.randomUUID();
+		}
+
+
+		//=====================================================================
 		async function SQL_Insert( Document )
 		{
 			if ( !Document ) { return null; }
 			await update_catalog();
-			if ( Storage.Settings.ModifySchema ) { await update_table_schema( Document ); }
+			await ensure_schema();
 
+			if ( !Storage.Catalog.id_field ) { throw new Error( `Cannot insert rows into table [${Storage.Settings.Database}.${Storage.Settings.Table}], a primary key field was not found. ` ); }
+			let id_field = Storage.Catalog.id_field;
+			let id_column = Storage.Catalog.fields[ id_field ];
+			let auto_increment = !!( id_column && id_column.is_auto_increment );
 
-			// Get the _id field.
-			if ( !Storage.Catalog.id_field ) { throw new Error( `Cannot insert rows into table [${Storage.Settings.Database}.${Storage.Settings.Table}], an auto-increment, primary key field was not found. ` ); }
+			// ***The caller's _id is taken as given.*** Only an auto-increment key gets to
+			// choose one, and then it is the server which chooses it.
+			let document = Document;
+			if ( !auto_increment && ( jsongin.ShortType( document[ id_field ] ) === 'u' ) )
+			{
+				document = jsongin.Clone( Document );
+				document[ id_field ] = new_id();
+			}
+
+			let row = document_to_row( document );
+			if ( !auto_increment ) { row[ id_field ] = id_to_key( document[ id_field ] ); }
+
+			let columns = Object.keys( row );
+			if ( columns.length === 0 ) { return null; }
 
 			let sql = `INSERT INTO ??.??`;
 			let sql_parameters = [ Storage.Settings.Database, Storage.Settings.Table ];
-
-			// Scan for the column list.
 			let tokens = [];
-			let columns = [];
-			let hybrid = jsongin.Hybridize( Document );
-			for ( let key in hybrid )
+			for ( let index = 0; index < columns.length; index++ )
 			{
-				if ( key.includes( '.' ) ) { continue; }
-				// A value SQL has no form for - a function, an undefined, a symbol - is given no
-				// column by update_table_schema, so it cannot be named in the column list either.
-				// Naming it made the whole insert fail with "Unknown column", which the Rainbow
-				// suite's before() swallowed, leaving every one of its tests to run against an
-				// empty table.
-				if ( !Storage.Catalog.fields[ key ] ) { continue; }
 				tokens.push( '??' );
-				columns.push( key );
-				sql_parameters.push( key );
+				sql_parameters.push( columns[ index ] );
 			}
-			if ( columns.length === 0 ) { return null; }
 			sql += ` ( ${tokens.join( ', ' )} )`;
-
-			// Get the values to insert.
 			tokens = [];
 			for ( let index = 0; index < columns.length; index++ )
 			{
-				let value = hybrid[ columns[ index ] ];
 				tokens.push( '?' );
-				sql_parameters.push( value );
+				sql_parameters.push( row[ columns[ index ] ] );
 			}
-			sql += ` VALUES `;
-			sql += ` ( ${tokens.join( ', ' )} )`;
+			sql += ` VALUES  ( ${tokens.join( ', ' )} )`;
 
-			// Get results.
 			let results = await SQL_Passthrough( sql, sql_parameters );
 			if ( results.results.affectedRows === 0 ) { return null; }
 
+			let key = auto_increment ? results.results.insertId : row[ id_field ];
 			sql = `SELECT * FROM ??.?? WHERE (?? = ?)`;
 			sql_parameters = [
 				Storage.Settings.Database,
 				Storage.Settings.Table,
-				Storage.Catalog.id_field,
-				results.results.insertId,
+				id_field,
+				key,
 			];
 
 			results = await SQL_Passthrough( sql, sql_parameters );
@@ -505,8 +753,7 @@ module.exports = {
 			if ( !documents ) { return null; }
 			if ( !documents.length ) { return null; }
 
-			let document = row_to_document( documents[ 0 ] );
-			return document;
+			return row_to_document( documents[ 0 ] );
 		}
 
 
@@ -515,34 +762,32 @@ module.exports = {
 		{
 			if ( !Document ) { return null; }
 			await update_catalog();
-			if ( Storage.Settings.ModifySchema ) { await update_table_schema( Document ); }
+			await ensure_schema();
 
-			// Get the _id field.
-			if ( !Storage.Catalog.id_field ) { throw new Error( `Cannot update rows into table [${Storage.Settings.Database}.${Storage.Settings.Table}], an auto-increment, primary key field was not found.` ); }
-			if ( !Document[ Storage.Catalog.id_field ] ) { throw new Error( `Cannot update this document, it is missing the id field [${Storage.Catalog.id_field}].` ); }
+			if ( !Storage.Catalog.id_field ) { throw new Error( `Cannot update rows in table [${Storage.Settings.Database}.${Storage.Settings.Table}], a primary key field was not found.` ); }
+			let id_field = Storage.Catalog.id_field;
+			if ( jsongin.ShortType( Document[ id_field ] ) === 'u' ) { throw new Error( `Cannot update this document, it is missing the id field [${id_field}].` ); }
+
+			let row = document_to_row( Document );
+			delete row[ id_field ];
+			let columns = Object.keys( row );
+			if ( columns.length === 0 ) { return null; }
 
 			let sql = `UPDATE ??.?? SET `;
 			let sql_parameters = [ Storage.Settings.Database, Storage.Settings.Table ];
-
-			// Build the sql update statement.
 			let tokens = [];
-			let columns = [];
-			let hybrid = jsongin.Hybridize( Document );
-			for ( let key in hybrid )
+			for ( let index = 0; index < columns.length; index++ )
 			{
-				if ( key.includes( '.' ) ) { continue; }
-				if ( key === Storage.Catalog.id_field ) { continue; }
 				tokens.push( '?? = ?' );
-				sql_parameters.push( key );
-				sql_parameters.push( hybrid[ key ] );
+				sql_parameters.push( columns[ index ] );
+				sql_parameters.push( row[ columns[ index ] ] );
 			}
-			if ( tokens.length === 0 ) { return null; }
 			sql += tokens.join( ', ' );
 			sql += ' WHERE (?? = ?)';
-			sql_parameters.push( Storage.Catalog.id_field );
-			sql_parameters.push( hybrid[ Storage.Catalog.id_field ] );
+			let key = id_to_key( Document[ id_field ] );
+			sql_parameters.push( id_field );
+			sql_parameters.push( key );
 
-			// Get results.
 			let results = await SQL_Passthrough( sql, sql_parameters );
 			if ( results.results.affectedRows === 0 ) { return null; }
 
@@ -550,8 +795,8 @@ module.exports = {
 			sql_parameters = [
 				Storage.Settings.Database,
 				Storage.Settings.Table,
-				Storage.Catalog.id_field,
-				hybrid[ Storage.Catalog.id_field ],
+				id_field,
+				key,
 			];
 
 			results = await SQL_Passthrough( sql, sql_parameters );
@@ -559,9 +804,9 @@ module.exports = {
 			if ( !documents ) { return null; }
 			if ( !documents.length ) { return null; }
 
-			let document = row_to_document( documents[ 0 ] );
-			return document;
+			return row_to_document( documents[ 0 ] );
 		}
+
 
 
 		//=====================================================================
@@ -571,15 +816,15 @@ module.exports = {
 			await update_catalog();
 
 			// Get the _id field.
-			if ( !Storage.Catalog.id_field ) { throw new Error( `Cannot delete rows from table [${Storage.Settings.Database}.${Storage.Settings.Table}], an auto-increment, primary key field was not found.` ); }
-			if ( !Document[ Storage.Catalog.id_field ] ) { throw new Error( `Cannot delete this document, it is missing the id field [${Storage.Catalog.id_field}].` ); }
+			if ( !Storage.Catalog.id_field ) { throw new Error( `Cannot delete rows from table [${Storage.Settings.Database}.${Storage.Settings.Table}], a primary key field was not found.` ); }
+			if ( jsongin.ShortType( Document[ Storage.Catalog.id_field ] ) === 'u' ) { throw new Error( `Cannot delete this document, it is missing the id field [${Storage.Catalog.id_field}].` ); }
 
 			let sql = `DELETE FROM ??.?? WHERE (?? = ?) `;
 			let sql_parameters = [
 				Storage.Settings.Database,
 				Storage.Settings.Table,
 				Storage.Catalog.id_field,
-				Document[ Storage.Catalog.id_field ],
+				id_to_key( Document[ Storage.Catalog.id_field ] ),
 			];
 
 			// Get results.

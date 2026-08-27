@@ -44,6 +44,9 @@ let storage = jsonstor.GetStorage( 'jsonstor-mysql', {
 	UserName: '...',
 	Password: '...',
 	ModifySchema: false,
+	PayloadColumn: "",
+	PayloadSync: false,
+	Columns: [],
 } );
 ```
 
@@ -59,18 +62,25 @@ Settings
 | `IdField` | No | `""` | The column to treat as the document identifier. Empty means none. |
 | `UserName` | ***Yes*** | - | The user to connect as. |
 | `Password` | ***Yes*** | - | That user's password. Pass an empty string for none - the setting itself is required. |
-| `ModifySchema` | No | `false` | Allow the adapter to create tables and columns as needed during inserts and updates. |
+| `ModifySchema` | No | `false` | Allow the adapter to create the table and the columns it is told to create. It never adds a column because a document had a field. |
+| `PayloadColumn` | No | `""` | The column which stores the document as JSON text. Empty means none, and then every field must already be a column. Created when missing if `ModifySchema` is `true`. |
+| `PayloadSync` | No | `false` | Store the whole document in the payload, making the other columns an index over it. When `false` the payload holds only the fields which have no column. |
+| `Columns` | No | `[]` | Columns to create, as `{ Name, Type, Key }`. Used only when this adapter creates the table; afterwards the table itself is the authority. |
 
 Peculiarities
 ---------------------------------------------------------------------
 
 - ***A criteria becomes a `WHERE` clause ***and*** is handed to `jsongin`.*** The clause is a pre-filter which decides how many rows leave the server; `jsongin.Query` then decides which of them match. So an operator `SqlExpression` cannot translate is ***left out of the statement rather than refused***, and the result broadens: more rows travel, and the answer is the same one every other adapter gives. What that costs, and which operators it applies to, is measured in [SQL Coverage](/guides/SQL%20Coverage.md).
-- ***A relational table is not a document store, and four differences follow from that:***
+- ***The table is an index over the document, not the document.*** Real columns are what the `WHERE` clause can filter on; the `PayloadColumn` carries the document itself. This is the same shape DynamoDB uses, and it is what lets a relational table answer questions about arbitrary JSON. ***Which of three configurations you get is decided by two settings:***
+  - ***No `PayloadColumn`.*** The document *is* the columns. A field with no column, or a value SQL has no form for, is ***refused by name*** rather than dropped. Use this to store flat documents in a table you already have.
+  - ***`PayloadColumn` with `PayloadSync: false`.*** The columns hold the fields they have, and the payload holds everything else. Nothing is duplicated, and a column another application writes stays visible to jsonstor.
+  - ***`PayloadColumn` with `PayloadSync: true`.*** The payload holds the whole document and the columns become an index over it. ***This is the only configuration which answers every question the other adapters answer***, because the payload is real JSON: an absent field stays apart from one holding null, a number does not come back a string, and an object keeps its field order.
+- ***A column which mirrors the payload is filtered on, then checked again.*** Under `PayloadSync: true` a value which does not fit its column is stored as `NULL` there and kept in the payload, so every condition on such a column is widened to admit `NULL` and `jsongin` decides the row from the payload. The clause narrows the search; it never narrows the answer.
+- ***Two differences remain in the configurations which have no payload for a field:***
   - There is no way to store `undefined`. A query matching a field against `undefined` always fails.
-  - A field missing from an insert is filled with the column default. There is no way to ask afterwards whether it was supplied.
-  - An object is stored as JSON text in its column, and field order is not preserved on the way back. A strict equality comparison against a whole object may fail.
-  - The set of fields a document may have is the set of columns the table has, unless `ModifySchema` is `true`.
-- ***`ModifySchema: true` lets the adapter alter your database.*** It creates tables and adds columns during ordinary inserts and updates. Convenient while developing; think before enabling it against anything you care about.
+  - A field missing from an insert is filled with the column default, so an absent field and one holding `null` read back the same. Set `PayloadSync: true` if that distinction matters.
+- ***`ModifySchema: true` lets the adapter alter your database.*** It creates the table, the columns named in `Columns`, and the `PayloadColumn`. ***It never adds a column because a document had a field***, so your schema is what you declared rather than a record of whatever was inserted first. Think before enabling it against anything you care about.
+- ***A table this adapter creates has a `VARCHAR` `_id` and a `_seq` column.*** Your `_id` is taken as given and one is minted when you omit it, the way every other adapter behaves. `_seq` records insertion order, because a `SELECT` with no `ORDER BY` promises none; it is never part of a document.
 - `UserName` and `Password` are ***both required settings***, even when the password is empty. The adapter throws if either is absent.
 
 Storage Interface

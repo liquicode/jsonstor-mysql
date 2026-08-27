@@ -9,9 +9,9 @@ Every test in this family lives in [`@liquicode/jsonstor-docs`](https://github.c
 
 ## Engine Tests
 
-| Engine         |            A |            B |           C |           D |            M |            N |           Z |               Total |
-|----------------|-------------:|-------------:|------------:|------------:|-------------:|-------------:|------------:|--------------------:|
-| jsonstor-mysql | 10/0 (9.05s) | 27/0 (399ms) | 7/0 (1.56s) | 9/0 (281ms) | 21/5 (197ms) | 32/7 (765ms) | 1/1 (152ms) | **107/13** (12.40s) |
+| Engine         |            A |            B |           C |           D |           M |            N |           Z |             Total |
+|----------------|-------------:|-------------:|------------:|------------:|------------:|-------------:|------------:|------------------:|
+| jsonstor-mysql | 10/0 (6.05s) | 27/0 (215ms) | 7/0 (1.06s) | 9/0 (201ms) | 26/0 (97ms) | 39/0 (642ms) | 2/0 (138ms) | **120/0** (8.40s) |
 
 Each cell is ***passing/failing (duration)***.
 
@@ -27,31 +27,4 @@ Each cell is ***passing/failing (duration)***.
 
 ## Failures
 
-***13 failing.***
-
-1. `jsonstor-mysql M) MongoDB Tutorial Query an Array (https://www.mongodb.com/docs/manual/tutorial/query-arrays/) Query an Array for an Element Match a Single Array Element`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 4 )
-2. `jsonstor-mysql M) MongoDB Tutorial Query an Array (https://www.mongodb.com/docs/manual/tutorial/query-arrays/) Query an Array for an Element Match Array Elements by Comparison`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 1 )
-3. `jsonstor-mysql M) MongoDB Tutorial Query an Array (https://www.mongodb.com/docs/manual/tutorial/query-arrays/) Specify Multiple Conditions for Array Elements Query an Array with Compound Filter Conditions on the Array Elements`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 4 )
-4. `jsonstor-mysql M) MongoDB Tutorial Query for Null or Missing Fields (https://www.mongodb.com/docs/manual/tutorial/query-for-null-fields/) Type Check Match Fields that Exist And are Null`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 1 )
-5. `jsonstor-mysql M) MongoDB Tutorial Query for Null or Missing Fields (https://www.mongodb.com/docs/manual/tutorial/query-for-null-fields/) Existence Check Match Fields that are Missing`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 1 )
-6. `jsonstor-mysql N) MongoDB Reference Comparison Query Operators Comparison Operator: $in (https://www.mongodb.com/docs/manual/reference/operator/query/in/) Use the $in Operator to Match Values in an Array`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 3 )
-7. `jsonstor-mysql N) MongoDB Reference Comparison Query Operators Comparison Operator: $nin (https://www.mongodb.com/docs/manual/reference/operator/query/nin/) Select on Unmatching Documents`
-   - The expression evaluated to a falsy value:    assert.ok( results[ 1 ].quantity === undefined )
-8. `jsonstor-mysql N) MongoDB Reference Logical Query Operators Logical Operator: $and (https://www.mongodb.com/docs/manual/reference/operator/query/and/) AND Queries With Multiple Expressions Specifying the Same Field`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 3 )
-9. `jsonstor-mysql N) MongoDB Reference Element Query Operators Element Query Operator: $exists (https://www.mongodb.com/docs/manual/reference/operator/query/exists/) Null Values`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 7 )
-10. `jsonstor-mysql N) MongoDB Reference Element Query Operators Element Query Operator: $type (https://www.mongodb.com/docs/manual/reference/operator/query/type/) Querying by Data Type (BSON Code)`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 2 /* string */ )
-11. `jsonstor-mysql N) MongoDB Reference Element Query Operators Element Query Operator: $type (https://www.mongodb.com/docs/manual/reference/operator/query/type/) Querying by Data Type (BSON Alias)`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 2 )
-12. `jsonstor-mysql N) MongoDB Reference Element Query Operators Element Query Operator: $type (https://www.mongodb.com/docs/manual/reference/operator/query/type/) Querying by Data Type ("number")`
-   - The expression evaluated to a falsy value:    assert.ok( results.length === 3 )
-13. `jsonstor-mysql Z) Ad-Hoc Tests should not match explicit nested fields`
-   - Data truncated for column '_id' at row 1
+***No failures.***
