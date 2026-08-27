@@ -64,7 +64,7 @@ Settings
 Peculiarities
 ---------------------------------------------------------------------
 
-- ***A criteria is translated into a `WHERE` clause, not handed to `jsongin`.*** What this adapter supports is what `SqlExpression` can render, which is a smaller set than the engine implements. An operator it cannot translate is refused rather than quietly ignored.
+- ***A criteria becomes a `WHERE` clause ***and*** is handed to `jsongin`.*** The clause is a pre-filter which decides how many rows leave the server; `jsongin.Query` then decides which of them match. So an operator `SqlExpression` cannot translate is ***left out of the statement rather than refused***, and the result broadens: more rows travel, and the answer is the same one every other adapter gives. What that costs, and which operators it applies to, is measured in [SQL Coverage](/guides/SQL%20Coverage.md).
 - ***A relational table is not a document store, and four differences follow from that:***
   - There is no way to store `undefined`. A query matching a field against `undefined` always fails.
   - A field missing from an insert is filled with the column default. There is no way to ask afterwards whether it was supplied.
