@@ -89,6 +89,30 @@ module.exports = {
 		// which were written, which is what a payload holding the document has to do.
 		const PAYLOAD_TYPE = 'LONGTEXT DEFAULT NULL';
 
+		// ***What MySQL does differently, declared in one place.***
+		//
+		// SqlExpression defaults every one of these to the answer which is safe on every
+		// engine, so this list is exactly what MySQL asks for beyond that. An option added
+		// there later for another dialect arrives here as a default and can only cost this
+		// adapter a rendering it never had - it can never narrow a clause. See
+		// jsonx/.plans/sql-adapter-architecture.md, The Dialect Interface.
+		const SQL_DIALECT = {
+			// MySQL quotes an identifier with a backtick, which leaves the double quote free
+			// to open a string literal.
+			IdentifierQuotes: '`',
+			StringLiteralQuotes: '"',
+			// A backslash is an escape character to MySQL, so a literal one has to be doubled.
+			StringLiteralEscape: 'backslash',
+			// And it is MySQL's default LIKE escape, so the pattern needs no ESCAPE clause.
+			LikeEscapeCharacter: '\\',
+			LikeEscapeClause: false,
+			// Measured against MySQL 8.0.41: NULL IS NOT TRUE is 1, 0 IS NOT TRUE is 1,
+			// 1 IS NOT TRUE is 0 - which is the question negate() is asking.
+			NegateWithIsNotTrue: true,
+			RendersModulo: true,
+			RendersBitwise: true,
+		};
+
 
 		//=====================================================================
 		let MySqlFieldTypes = {
@@ -609,11 +633,8 @@ module.exports = {
 			if ( !'olu'.includes( st_criteria ) ) { throw new Error( `Criteria must be an object, null, or undefined.` ); }
 
 			// Convert criteria to an sql expression.
-			let sql_expression_options = {
-				StringLiteralQuotes: '"',
-				IdentifierQuotes: '`',
-				AllowedFields: {},
-			};
+			let sql_expression_options = jsongin.Clone( SQL_DIALECT );
+			sql_expression_options.AllowedFields = {};
 			let payload_sync = ( Storage.Catalog.payload_field !== null ) && Storage.Settings.PayloadSync;
 			for ( let key in Storage.Catalog.fields )
 			{
