@@ -269,9 +269,10 @@ module.exports = {
 				field.is_auto_increment = has_flag( field.flags, MySqlFieldFlags.AUTO_INCREMENT_FLAG );
 				if ( field.type === MySqlFieldTypes.TINY ) 
 				{
-					// update_table_schema writes a boolean as TINYINT(1). Typing it as anything
-					// else costs the round trip: the driver hands back 1 and 0, and a criteria
-					// asking for a strict true then matches nothing.
+					// A boolean lands in a TINYINT(1), whether a caller declared the column or the
+					// table was already that way when it was found. Typing it as anything else
+					// costs the round trip: the driver hands back 1 and 0, and a criteria asking
+					// for a strict true then matches nothing.
 					field.type_name = 'TINYINT';
 					field.short_type = 'b';
 				}
