@@ -9,9 +9,11 @@ Every test in this family lives in [`@liquicode/jsonstor-docs`](https://github.c
 
 ## Engine Tests
 
-| Engine         |            A |            B |           C |           D |            M |            N |           Z |             Total |
-|----------------|-------------:|-------------:|------------:|------------:|-------------:|-------------:|------------:|------------------:|
-| jsonstor-mysql | 10/0 (6.89s) | 27/0 (262ms) | 7/0 (1.20s) | 9/0 (243ms) | 26/0 (115ms) | 39/0 (762ms) | 2/0 (156ms) | **120/0** (9.63s) |
+| Engine                   |            A |            B |           C |           D |           E |            M |            N |           Z |              Total |
+|--------------------------|-------------:|-------------:|------------:|------------:|------------:|-------------:|-------------:|------------:|-------------------:|
+| jsonstor-mysql           | 10/0 (7.35s) | 27/0 (314ms) | 7/0 (1.32s) | 9/0 (240ms) | 6/0 (206ms) | 26/0 (118ms) | 39/0 (740ms) | 2/0 (162ms) | **126/0** (10.45s) |
+| jsonstor-mysql (columns) | 10/0 (6.82s) | 27/0 (298ms) | 7/0 (1.31s) | 9/0 (220ms) | 6/0 (249ms) | 26/0 (113ms) | 39/0 (798ms) | 2/0 (193ms) | **126/0** (10.00s) |
+| **total**                |     **20/0** |     **54/0** |    **14/0** |    **18/0** |    **12/0** |     **52/0** |     **78/0** |     **4/0** | **252/0** (20.45s) |
 
 Each cell is ***passing/failing (duration)***.
 
@@ -21,9 +23,22 @@ Each cell is ***passing/failing (duration)***.
 | B      | Rainbow Query Tests        |
 | C      | UserInfo Permissions Tests |
 | D      | Engine Contract Tests      |
+| E      | Extension Operator Tests   |
 | M      | MongoDB Tutorial           |
 | N      | MongoDB Reference          |
 | Z      | Ad-Hoc Tests               |
+
+## Sql Tests
+
+| Engine         |            P |           Q |          R |            Total |
+|----------------|-------------:|------------:|-----------:|-----------------:|
+| jsonstor-mysql | 23/0 (218ms) | 20/0 (80ms) | 2/0 (14ms) | **45/0** (312ms) |
+
+| Column | Category              |
+|--------|-----------------------|
+| P      | Predicate Inventory   |
+| Q      | Criteria Combinations |
+| R      | Known Narrowing       |
 
 ## Failures
 
