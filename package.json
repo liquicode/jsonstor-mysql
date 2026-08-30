@@ -16,6 +16,16 @@
 		}
 	],
 	"main": "src/jsonstor-mysql.js",
+	"types": "./types/jsonstor-mysql.d.ts",
+	"exports": {
+		".": {
+			"types": "./types/jsonstor-mysql.d.ts",
+			"import": "./src/jsonstor-mysql.mjs",
+			"require": "./src/jsonstor-mysql.js",
+			"default": "./src/jsonstor-mysql.js"
+		},
+		"./package.json": "./package.json"
+	},
 	"scripts": {
 		"publish version": "npx @liquicode/devops --tasks .\\build\\devops.tasks.js publish_version",
 		"start new version": "npx @liquicode/devops --tasks .\\build\\devops.tasks.js start_new_version"
