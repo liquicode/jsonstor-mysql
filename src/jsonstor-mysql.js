@@ -624,7 +624,10 @@ module.exports = {
 
 
 		//=====================================================================
-		async function SQL_Query( Criteria, MaxDocs = 0 )
+		// ***Options is threaded in rather than held in a closure.*** It carries the statistics
+		// collector for this one call, and a variable on the Storage would blend two overlapping
+		// calls into one meaningless pair of numbers.
+		async function SQL_Query( Criteria, MaxDocs = 0, Options = null )
 		{
 			// A malformed criteria is refused, not answered - the same rule the built in
 			// adapters apply. Without it a criteria of the wrong type reached SqlExpression
@@ -692,6 +695,17 @@ module.exports = {
 					if ( MaxDocs && ( filtered.length === MaxDocs ) ) { break; }
 				}
 			}
+
+			// ***What the two stages actually did.*** A no-op unless the caller asked for it.
+			// PushdownRows is what the server sent; ResidualRows is what this call produced,
+			// which a MaxDocs limit stops early - FindOne reports 1 however many matched.
+			jsonstor.ReportStatistics( Options, {
+				Translator: Storage.SqlTranslation.TranslatorName,
+				Pushdown: sql_expr || null,
+				PushdownRows: documents.length,
+				Residual: translation.Residual,
+				ResidualRows: filtered.length,
+			} );
 
 			// Return the results.
 			return filtered;
@@ -963,7 +977,7 @@ module.exports = {
 
 		Storage.Count = async function ( Criteria, Options = {} ) 
 		{
-			let documents = await SQL_Query( Criteria, 0 );
+			let documents = await SQL_Query( Criteria, 0, Options );
 			return documents.length;
 		};
 
@@ -1023,7 +1037,7 @@ module.exports = {
 			// A read returns documents. ReturnDocuments gates what a *write* hands back, which
 			// is how the built in adapters read: their FindOne, FindMany and FindMany2 never
 			// consult it. Gating here handed a count to every caller which omitted Options.
-			let documents = await SQL_Query( Criteria, 1 );
+			let documents = await SQL_Query( Criteria, 1, Options );
 			if ( !documents.length ) { return null; }
 			if ( Projection )
 			{
@@ -1041,7 +1055,7 @@ module.exports = {
 		Storage.FindMany = async function FindMany( Criteria, Projection, Options = {} ) 
 		{
 			// A read returns documents. See the note on FindOne.
-			let documents = await SQL_Query( Criteria, 0 );
+			let documents = await SQL_Query( Criteria, 0, Options );
 			if ( Projection )
 			{
 				for ( let index = 0; index < documents.length; index++ )
@@ -1061,7 +1075,7 @@ module.exports = {
 		Storage.FindMany2 = async function FindMany2( Criteria, Projection, Sort, MaxCount, Options = {} ) 
 		{
 			// A read returns documents. See the note on FindOne.
-			let documents = await SQL_Query( Criteria, 0 );
+			let documents = await SQL_Query( Criteria, 0, Options );
 			if ( Projection )
 			{
 				for ( let index = 0; index < documents.length; index++ )
@@ -1082,7 +1096,7 @@ module.exports = {
 
 		Storage.UpdateOne = async function UpdateOne( Criteria, Update, Options = {} ) 
 		{
-			let documents = await SQL_Query( Criteria, 1 );
+			let documents = await SQL_Query( Criteria, 1, Options );
 			let document = null;
 			if ( documents && documents.length )
 			{
@@ -1113,7 +1127,7 @@ module.exports = {
 
 		Storage.UpdateMany = async function UpdateMany( Criteria, Update, Options = {} ) 
 		{
-			let documents = await SQL_Query( Criteria, 0 );
+			let documents = await SQL_Query( Criteria, 0, Options );
 			for ( let index = 0; index < documents.length; index++ )
 			{
 				documents[ index ] = jsongin.Update( documents[ index ], Update );
@@ -1138,7 +1152,7 @@ module.exports = {
 
 		Storage.ReplaceOne = async function ReplaceOne( Criteria, Document, Options = {} ) 
 		{
-			let documents = await SQL_Query( Criteria, 1 );
+			let documents = await SQL_Query( Criteria, 1, Options );
 			let document = null;
 			if ( documents && documents.length )
 			{
@@ -1175,7 +1189,7 @@ module.exports = {
 
 		Storage.DeleteOne = async function DeleteOne( Criteria, Options = {} ) 
 		{
-			let documents = await SQL_Query( Criteria, 1 );
+			let documents = await SQL_Query( Criteria, 1, Options );
 			let document = null;
 			if ( documents && documents.length )
 			{
@@ -1205,7 +1219,7 @@ module.exports = {
 
 		Storage.DeleteMany = async function DeleteMany( Criteria, Options = {} ) 
 		{
-			let documents = await SQL_Query( Criteria, 0 );
+			let documents = await SQL_Query( Criteria, 0, Options );
 			for ( let index = 0; index < documents.length; index++ )
 			{
 				await SQL_Delete( documents[ index ] );
