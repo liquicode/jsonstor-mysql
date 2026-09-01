@@ -1243,3 +1243,37 @@ module.exports = {
 };
 
 
+//---------------------------------------------------------------------
+// ***This package is one prime and four aliases.***
+//
+// MySQL 5.7.44, 8.0.46 and 8.4.11 were measured against this adapter on 2026-09-01 and
+// answered ***identically*** - 303 passing on each, and a predicate inventory which matches
+// line for line, the same clauses rendered and the same ones deferred. ***So there is one
+// dialect profile here and no version needs a second one.***
+//
+// ***A prime is a floor and takes the name of the lowest version it covers***, which is why
+// the profile is `-v5.7` rather than `-v8.0`: it is valid from 5.7 upward, and 5.7 is simply
+// the oldest server this was proven against. The newer names are aliases onto it.
+//
+// See jsonx/.plans/versioned-adapters.md.
+
+const MYSQL_V57 = {
+	AdapterName: 'jsonstor-mysql-v5.7',
+	AdapterDescription: module.exports.AdapterDescription,
+	GetAdapter: module.exports.GetAdapter,
+};
+
+module.exports.Adapters = [ MYSQL_V57 ];
+
+// ***The bare name is listed here rather than left on the plugin object.*** Naming it stops
+// the plugin registering itself under it, so `GetStorage( 'jsonstor-mysql' )` reports the prime
+// it resolved to instead of reporting itself as its own dialect.
+module.exports.Aliases = {
+	'jsonstor-mysql': 'jsonstor-mysql-v5.7',
+	'jsonstor-mysql-v5': 'jsonstor-mysql-v5.7',
+	'jsonstor-mysql-v8': 'jsonstor-mysql-v5.7',
+	'jsonstor-mysql-v8.0': 'jsonstor-mysql-v5.7',
+	'jsonstor-mysql-v8.4': 'jsonstor-mysql-v5.7',
+};
+
+
