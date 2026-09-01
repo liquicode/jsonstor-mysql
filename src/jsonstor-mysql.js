@@ -934,7 +934,22 @@ module.exports = {
 		//=====================================================================
 
 
-		Storage.DropStorage = async function ( Options ) 
+		// ***What this storage is actually talking to.*** The names come from the storage and the
+		// version from the server, asked every time rather than cached, because a server can be
+		// replaced under a long-lived storage.
+		Storage.StorageInfo = async function ( Options )
+		{
+			let answer = await SQL_Passthrough( 'SELECT VERSION() AS server_version', [] );
+			let row = answer.results[ 0 ] || {};
+			return jsonstor.BuildStorageInfo( Storage, {
+				Product: 'MySQL',
+				Version: row.server_version || '',
+				Endpoint: `${Storage.Settings.Server}:${Storage.Settings.Port}`,
+			} );
+		};
+
+
+		Storage.DropStorage = async function ( Options )
 		{
 			try
 			{
