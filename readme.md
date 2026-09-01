@@ -69,6 +69,9 @@ A name with its own dialect was measured against that server version and covers 
   later one up to the next such name. The rest resolve to one of those. The bare name
   follows the newest dialect this package carries, which is what most callers want.
 
+A name whose dialect your server cannot serve is refused on the first operation, naming
+  the version you asked for and the one the server needs.
+
 Settings
 ---------------------------------------------------------------------
 

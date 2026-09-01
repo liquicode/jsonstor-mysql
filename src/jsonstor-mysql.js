@@ -196,8 +196,39 @@ module.exports = {
 		}
 
 
+		// ***The dialect is checked against the server once, on the first statement.***
+		//
+		// The connection is lazy and `GetStorage` is synchronous, so a mismatched server cannot
+		// be caught at construction and surfaces on the first operation instead. ***The outcome
+		// is remembered, so every later call fails the same way***: a storage pointed at a
+		// server its dialect cannot serve is wrong for its whole life, not only once.
+		//
+		// ***A server which did not answer is not remembered***, because that is a transient
+		// failure rather than an answer, and caching it would poison the storage.
+		let dialect_check = null;
+		async function ensure_dialect_checked()
+		{
+			if ( dialect_check !== null )
+			{
+				if ( dialect_check.Error ) { throw dialect_check.Error; }
+				return;
+			}
+			// Set before asking, so that StorageInfo's own statement does not re-enter this.
+			dialect_check = {};
+			try { await Storage.StorageInfo(); }
+			catch ( error )
+			{
+				if ( error && error.DialectBoundary ) { dialect_check.Error = error; }
+				else { dialect_check = null; }
+				throw error;
+			}
+			return;
+		}
+
+
 		async function SQL_Passthrough( SqlStatement, SqlParameters )
 		{
+			await ensure_dialect_checked();
 			return new Promise(
 				async ( resolve, reject ) =>
 				{
@@ -1276,6 +1307,14 @@ const MYSQL_V57 = {
 	AdapterName: 'jsonstor-mysql-v5.7',
 	AdapterDescription: module.exports.AdapterDescription,
 	GetAdapter: module.exports.GetAdapter,
+	// ***The floor this profile starts at***, which is what makes it a floor rather than a
+	// label: it covers every server from here up to the next prime, and a server below it is
+	// refused rather than rendered SQL it will not accept.
+	Version: [ 5, 7 ],
+	// ***The newest server it has actually been run against.*** Not the same question as the
+	// floor, and both are needed: a server past this one is very likely fine and is certainly
+	// untested, so it earns a warning where a crossed floor earns an error.
+	MeasuredTo: [ 8, 4 ],
 };
 
 module.exports.Adapters = [ MYSQL_V57 ];
