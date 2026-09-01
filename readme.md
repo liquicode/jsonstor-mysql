@@ -50,6 +50,25 @@ let storage = jsonstor.GetStorage( 'jsonstor-mysql', {
 } );
 ```
 
+Versions
+---------------------------------------------------------------------
+
+This package answers to more than one name. Pass any of these to `GetStorage()`;
+  a name which is not listed is refused.
+
+| Name | Dialect it uses | Measured against |
+|------|-----------------|------------------|
+| `jsonstor-mysql-v5.7` | its own | 5.7 |
+| `jsonstor-mysql` | `jsonstor-mysql-v5.7` | - |
+| `jsonstor-mysql-v5` | `jsonstor-mysql-v5.7` | - |
+| `jsonstor-mysql-v8` | `jsonstor-mysql-v5.7` | - |
+| `jsonstor-mysql-v8.0` | `jsonstor-mysql-v5.7` | 8.0 |
+| `jsonstor-mysql-v8.4` | `jsonstor-mysql-v5.7` | 8.4 |
+
+A name with its own dialect was measured against that server version and covers every
+  later one up to the next such name. The rest resolve to one of those. The bare name
+  follows the newest dialect this package carries, which is what most callers want.
+
 Settings
 ---------------------------------------------------------------------
 
