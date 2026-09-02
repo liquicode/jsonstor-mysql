@@ -1314,7 +1314,13 @@ const MYSQL_V57 = {
 	// ***The newest server it has actually been run against.*** Not the same question as the
 	// floor, and both are needed: a server past this one is very likely fine and is certainly
 	// untested, so it earns a warning where a crossed floor earns an error.
-	MeasuredTo: [ 8, 4 ],
+	//
+	// ***Every part of it, because the comparison zero-pads and a short answer claims less
+	// than was run.*** The server measured here reports 8.4.11, and declaring [ 8, 4 ] made
+	// this prime warn that its own test server was untested - a false warning nothing
+	// surfaced, found on 2026-09-01 while measuring Oracle. Oracle needs no such care for its
+	// 21.3.0.0.0, since the parts after the second are zeros either way.
+	MeasuredTo: [ 8, 4, 11 ],
 };
 
 module.exports.Adapters = [ MYSQL_V57 ];
