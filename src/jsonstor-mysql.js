@@ -133,20 +133,6 @@ module.exports = {
 
 
 		//=====================================================================
-		function is_ip_address( Url )
-		{
-			if ( jsongin.ShortType( Url ) !== 's' ) { throw new Error( `Server name or IP Address must be a string.` ); }
-			let parts = Url.split( '.' );
-			if ( parts.length !== 4 ) { return false; }
-			for ( let index = 0; index < parts.length; index++ )
-			{
-				if ( jsongin.AsNumber( parts[ index ] === null ) ) { return false; }
-			}
-			return true;
-		}
-
-
-		//=====================================================================
 		// WithConnection
 		//
 		// ***One connection for the life of the storage, which holds the process up only while
