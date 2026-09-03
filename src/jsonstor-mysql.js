@@ -28,6 +28,14 @@ module.exports = {
 		if ( jsongin.ShortType( Settings.UserName ) !== 's' ) { throw new Error( `This adapter requires a Settings.UserName string parameter.` ); }
 		if ( jsongin.ShortType( Settings.Password ) !== 's' ) { throw new Error( `This adapter requires a Settings.Password string parameter.` ); }
 		if ( jsongin.ShortType( Settings.ModifySchema ) !== 'b' ) { Settings.ModifySchema = false; }
+		// ***The two names are the family's, not this driver's.*** `jsonstor-mssql` named these
+		// first and the same pair is spelled the same way wherever a driver can carry it. mysql2
+		// takes an `ssl` option rather than two booleans, so they are mapped at the connection.
+		//
+		// ***Both defaults suit a local server and neither suits a hosted one.*** The fleet is
+		// plaintext and its certificates are self-signed; a hosted MySQL wants the opposite pair.
+		if ( jsongin.ShortType( Settings.Encrypt ) !== 'b' ) { Settings.Encrypt = false; }
+		if ( jsongin.ShortType( Settings.TrustServerCertificate ) !== 'b' ) { Settings.TrustServerCertificate = true; }
 		// The storage model. See jsonx/.plans/sql-adapter-architecture.md - real columns are an
 		// index which pre-filters, and the payload column carries the document. With no payload
 		// column the table *is* the document, and a field with no column is refused by name.
@@ -173,13 +181,22 @@ module.exports = {
 				HELD.promise = new Promise(
 					function ( resolve, reject )
 					{
-						let connection = MYSQL.createConnection( {
+						let connection_options = {
 							host: Storage.Settings.Server,
 							port: Storage.Settings.Port,
 							database: Storage.Settings.Database,
 							user: Storage.Settings.UserName,
 							password: Storage.Settings.Password,
-						} );
+						};
+						// ***The key is added rather than set to false.*** mysql2 reads the
+						// presence of `ssl` as the request for TLS and does not take `false` for
+						// an answer the way pg does, so the plaintext case omits it entirely.
+						// `rejectUnauthorized` is the inverse of trusting the certificate.
+						if ( Storage.Settings.Encrypt )
+						{
+							connection_options.ssl = { rejectUnauthorized: !Storage.Settings.TrustServerCertificate };
+						}
+						let connection = MYSQL.createConnection( connection_options );
 						if ( !connection ) { return reject( new Error( `Unable to establish a connection to the mysql database server.` ) ); }
 						// ***An unhandled 'error' on a connection takes the process down***, and
 						// a held connection is exactly the one which outlives the statement that
