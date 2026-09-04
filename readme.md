@@ -40,7 +40,8 @@ let storage = jsonstor.GetStorage( 'jsonstor-mysql', {
 	Port: 3306,
 	Database: '...',
 	Table: '...',
-	IdField: "",
+	PrimaryKey: "",
+	PrimaryKeyMutable: false,
 	UserName: '...',
 	Password: '...',
 	ModifySchema: false,
@@ -83,7 +84,8 @@ Settings
 | `Port` | No | `3306` | The service port of the MySql server. |
 | `Database` | ***Yes*** | - | The name of the database to use. |
 | `Table` | ***Yes*** | - | The name of the table to use. |
-| `IdField` | No | `""` | The column to treat as the document identifier. Empty means none. |
+| `PrimaryKey` | No | `""` | The column to treat as the document identifier. Empty discovers it from the table: a column named `_id`, then an auto-increment key. `IdField` is the former spelling and still works. |
+| `PrimaryKeyMutable` | No | `false` | Allow an update or a replacement to change the identifier. Off by default, so an operation which would move it is refused by name rather than silently discarded. |
 | `UserName` | ***Yes*** | - | The user to connect as. |
 | `Password` | ***Yes*** | - | That user's password. Pass an empty string for none - the setting itself is required. |
 | `ModifySchema` | No | `false` | Allow the adapter to create the table and the columns it is told to create. It never adds a column because a document had a field. |
