@@ -9,7 +9,7 @@
 	"homepage": "http://jsonstor.liquicode.com",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/liquicode/jsonstor-mysql"
+		"url": "git+https://github.com/liquicode/jsonstor-mysql.git"
 	},
 	"authors": [
 		{
@@ -47,14 +47,14 @@
 		"mongo query"
 	],
 	"devDependencies": {
-        "@liquicode/devops": "^0.1.0",
-        "webpack": "^5.89.0",
-        "webpack-cli": "^5.1.4",
-        "webpack-node-externals": "^3.0.0"
+		"@liquicode/devops": "^0.1.0",
+		"webpack": "^5.89.0",
+		"webpack-cli": "^5.1.4",
+		"webpack-node-externals": "^3.0.0"
 	},
 	"dependencies": {
-        "@liquicode/jsongin": "^0.2.0",
-        "@liquicode/jsonstor": "^0.2.0",
+		"@liquicode/jsongin": "^0.2.0",
+		"@liquicode/jsonstor": "^0.2.0",
 		"mysql2": "^3.6.5"
 	}
 }
