@@ -85,31 +85,31 @@ Settings
 | `Database` | ***Yes*** | - | The name of the database to use. |
 | `Table` | ***Yes*** | - | The name of the table to use. |
 | `PrimaryKey` | No | `""` | The column to treat as the document identifier. Empty discovers it from the table: a column named `_id`, then an auto-increment key. `IdField` is the former spelling and still works. |
-| `PrimaryKeyMutable` | No | `false` | Allow an update or a replacement to change the identifier. Off by default, so an operation which would move it is refused by name rather than silently discarded. |
+| `PrimaryKeyMutable` | No | `false` | Allow an update or replacement to change the identifier. When `false`, such an operation is refused. |
 | `UserName` | ***Yes*** | - | The user to connect as. |
 | `Password` | ***Yes*** | - | That user's password. Pass an empty string for none - the setting itself is required. |
-| `ModifySchema` | No | `false` | Allow the adapter to create the table and the columns it is told to create. It never adds a column because a document had a field. |
+| `ModifySchema` | No | `false` | Allow the adapter to create the table, the `Columns` and the `PayloadColumn`. It never adds a column for a new document field. |
 | `Encrypt` | No | `false` | Encrypt the connection with TLS. Off by default so that a local server connects; a hosted MySQL requires it on. |
 | `TrustServerCertificate` | No | `true` | Accept a certificate the machine does not trust, which is what a local server presents. Turn this off wherever `Encrypt` is on and the certificate is a real one. |
-| `PayloadColumn` | No | `""` | The column which stores the document as JSON text. Empty means none, and then every field must already be a column. Created when missing if `ModifySchema` is `true`. |
-| `PayloadSync` | No | `false` | Store the whole document in the payload, making the other columns an index over it. When `false` the payload holds only the fields which have no column. |
+| `PayloadColumn` | No | `""` | The column which stores the document as JSON text. Empty means none, and every field must have a column. Created if missing when `ModifySchema` is `true`. |
+| `PayloadSync` | No | `false` | Store the whole document in the payload, and copy fields into their columns for filtering. When `false`, the payload holds only fields without a column. |
 | `Columns` | No | `[]` | Columns to create, as `{ Name, Type, Key }`. Used only when this adapter creates the table; afterwards the table itself is the authority. |
 
 Peculiarities
 ---------------------------------------------------------------------
 
-- ***A criteria becomes a `WHERE` clause ***and*** is handed to `jsongin`.*** The clause is a pre-filter which decides how many rows leave the server; `jsongin.Query` then decides which of them match. So an operator `SqlExpression` cannot translate is ***left out of the statement rather than refused***, and the result broadens: more rows travel, and the answer is the same one every other adapter gives. What that costs, and which operators it applies to, is described in [Translation Layer](/guides/Translation-Layer.md).
-- ***The table is an index over the document, not the document.*** Real columns are what the `WHERE` clause can filter on; the `PayloadColumn` carries the document itself. This is the same shape DynamoDB uses, and it is what lets a relational table answer questions about arbitrary JSON. ***Which of three configurations you get is decided by two settings:***
-  - ***No `PayloadColumn`.*** The document *is* the columns. A field with no column, or a value SQL has no form for, is ***refused by name*** rather than dropped. Use this to store flat documents in a table you already have.
-  - ***`PayloadColumn` with `PayloadSync: false`.*** The columns hold the fields they have, and the payload holds everything else. Nothing is duplicated, and a column another application writes stays visible to jsonstor.
-  - ***`PayloadColumn` with `PayloadSync: true`.*** The payload holds the whole document and the columns become an index over it. ***This is the only configuration which answers every question the other adapters answer***, because the payload is real JSON: an absent field stays apart from one holding null, a number does not come back a string, and an object keeps its field order.
-- ***A column which mirrors the payload is filtered on, then checked again.*** Under `PayloadSync: true` a value which does not fit its column is stored as `NULL` there and kept in the payload, so every condition on such a column is widened to admit `NULL` and `jsongin` decides the row from the payload. The clause narrows the search; it never narrows the answer.
-- ***Two differences remain in the configurations which have no payload for a field:***
-  - There is no way to store `undefined`. A query matching a field against `undefined` always fails.
-  - A field missing from an insert is filled with the column default, so an absent field and one holding `null` read back the same. Set `PayloadSync: true` if that distinction matters.
-- ***`ModifySchema: true` lets the adapter alter your database.*** It creates the table, the columns named in `Columns`, and the `PayloadColumn`. ***It never adds a column because a document had a field***, so your schema is what you declared rather than a record of whatever was inserted first. Think before enabling it against anything you care about.
-- ***A table this adapter creates has a `VARCHAR` `_id` and a `_seq` column.*** Your `_id` is taken as given and one is minted when you omit it, the way every other adapter behaves. `_seq` records insertion order, because a `SELECT` with no `ORDER BY` promises none; it is never part of a document.
-- `UserName` and `Password` are ***both required settings***, even when the password is empty. The adapter throws if either is absent.
+- ***A criteria becomes a `WHERE` clause, and `jsongin` checks every returned row.*** Conditions SQL cannot express are left out of the clause, so more rows are read, but the result is the same as on any other adapter. See [Translation Layer](/guides/Translation-Layer.md).
+- ***Two settings choose how a document is stored:***
+  - ***No `PayloadColumn`.*** The document is the columns. A field with no column, or a value its column cannot hold, is refused. Use this for flat documents in an existing table.
+  - ***`PayloadColumn` with `PayloadSync: false`.*** Fields with a column are stored there, and every other field in the payload as JSON. A value which does not fit its column is refused.
+  - ***`PayloadColumn` with `PayloadSync: true`.*** The payload holds the whole document, and the columns are copies used for filtering. ***Only this configuration keeps every document exactly***: an absent field stays different from `null`, and a number stays a number.
+- ***A value must fit its column exactly.*** A fraction does not fit an integer column, a number outside the column's range does not fit, and a string longer than a `VARCHAR` or `CHAR` does not fit. With `PayloadSync: true` such a value is stored as `NULL` in the column and kept in the payload, so a search still finds it.
+- ***The columns used in the clause*** are the integer types, `DOUBLE`, `CHAR`, `VARCHAR`, the `TEXT` types and `TINYINT`, which is read as a boolean. A column of any other type, such as `JSON`, `DECIMAL`, `FLOAT` or `DATETIME`, is not filtered on, and a table with no payload column cannot store a value in it.
+- ***Without a payload for a field, an absent field reads back as `null`.*** Use `PayloadSync: true` if that matters.
+- ***`ModifySchema: true` lets the adapter change your database***: it creates the table, the `Columns` you list, and the `PayloadColumn`. It never adds a column because a document has a new field.
+- ***A table the adapter creates has a `VARCHAR(64)` `_id` and a `_seq` column*** which records insertion order and is never part of a document. The payload column is `LONGTEXT`. A table you created has no `_seq` and is read in the server's order.
+- ***The database must already exist.*** The adapter never creates one.
+- `UserName` and `Password` are both required, even when the password is empty.
 
 Storage Interface
 ---------------------------------------------------------------------

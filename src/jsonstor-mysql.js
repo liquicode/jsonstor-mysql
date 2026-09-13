@@ -141,11 +141,27 @@ module.exports = {
 		//=====================================================================
 		let MySqlFieldTypes = {
 			TINY: 1,
+			SHORT: 2,
 			INT: 3,
 			DOUBLE: 5,
+			LONGLONG: 8,
+			INT24: 9,
 			JSON: 245,
 			MEDIUMTEXT: 252,
+			VAR_STRING: 253,
 			STRING: 254,
+		};
+
+		// ***The integers a column of each type can hold, signed and unsigned.*** A value outside
+		// them is refused by a strict server and clipped by a lenient one, and either way the
+		// column cannot hold it. BIGINT is bounded by what a Javascript number holds exactly.
+		// FLOAT and DECIMAL are deliberately not known types here: the server rounds a value into
+		// them, and a rounded column would lose a row to a clause comparing against it.
+		const INTEGER_RANGES = {
+			SMALLINT: { Low: -32768, High: 32767, UnsignedHigh: 65535 },
+			MEDIUMINT: { Low: -8388608, High: 8388607, UnsignedHigh: 16777215 },
+			INT: { Low: -2147483648, High: 2147483647, UnsignedHigh: 4294967295 },
+			BIGINT: { Low: Number.MIN_SAFE_INTEGER, High: Number.MAX_SAFE_INTEGER, UnsignedHigh: Number.MAX_SAFE_INTEGER },
 		};
 
 
@@ -376,6 +392,19 @@ module.exports = {
 			// 	Storage.Catalog.id_field = '_id';
 			// }
 
+			// ***The declared length of each string column, which the field metadata does not state
+			// in characters.*** It reports bytes, and the bytes a character costs depend on the
+			// column's character set - so the catalog is asked instead.
+			let lengths = {};
+			let length_rows = await SQL_Passthrough(
+				`SELECT COLUMN_NAME AS column_name, CHARACTER_MAXIMUM_LENGTH AS max_length FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?;`,
+				[ Storage.Settings.Database, Storage.Settings.Table ] );
+			for ( let index = 0; index < length_rows.results.length; index++ )
+			{
+				let length_row = length_rows.results[ index ];
+				if ( length_row.max_length !== null ) { lengths[ length_row.column_name ] = Number( length_row.max_length ); }
+			}
+
 			for ( let index = 0; index < results.fields.length; index++ )
 			{
 				// Get the field definition.
@@ -383,7 +412,24 @@ module.exports = {
 				field.allow_null = !has_flag( field.flags, MySqlFieldFlags.NOT_NULL_FLAG );
 				field.is_primary_key = has_flag( field.flags, MySqlFieldFlags.PRI_KEY_FLAG );
 				field.is_auto_increment = has_flag( field.flags, MySqlFieldFlags.AUTO_INCREMENT_FLAG );
-				if ( field.type === MySqlFieldTypes.TINY ) 
+				field.is_unsigned = has_flag( field.flags, MySqlFieldFlags.UNSIGNED_FLAG );
+				field.is_integer = false;
+				field.max_length = ( typeof lengths[ field.name ] === 'number' ) ? lengths[ field.name ] : null;
+				// ***Every integer type is an integer column.*** Only INT was known, so SMALLINT,
+				// MEDIUMINT and BIGINT read as unknown, and a fraction written into an INT was
+				// accepted and rounded by the server (2026-09-13).
+				let integer_types = {};
+				integer_types[ MySqlFieldTypes.SHORT ] = 'SMALLINT';
+				integer_types[ MySqlFieldTypes.INT24 ] = 'MEDIUMINT';
+				integer_types[ MySqlFieldTypes.INT ] = 'INT';
+				integer_types[ MySqlFieldTypes.LONGLONG ] = 'BIGINT';
+				if ( typeof integer_types[ field.type ] === 'string' )
+				{
+					field.type_name = integer_types[ field.type ];
+					field.short_type = 'n';
+					field.is_integer = true;
+				}
+				else if ( field.type === MySqlFieldTypes.TINY )
 				{
 					// A boolean lands in a TINYINT(1), whether a caller declared the column or the
 					// table was already that way when it was found. Typing it as anything else
@@ -392,12 +438,7 @@ module.exports = {
 					field.type_name = 'TINYINT';
 					field.short_type = 'b';
 				}
-				else if ( field.type === MySqlFieldTypes.INT ) 
-				{
-					field.type_name = 'INT';
-					field.short_type = 'n';
-				}
-				else if ( field.type === MySqlFieldTypes.DOUBLE ) 
+				else if ( field.type === MySqlFieldTypes.DOUBLE )
 				{
 					field.type_name = 'DOUBLE';
 					field.short_type = 'n';
@@ -414,9 +455,16 @@ module.exports = {
 					field.type_name = 'MEDIUMTEXT';
 					field.short_type = 's';
 				}
-				else if ( field.type === MySqlFieldTypes.STRING ) 
+				else if ( field.type === MySqlFieldTypes.STRING )
 				{
 					field.type_name = 'STRING';
+					field.short_type = 's';
+				}
+				// ***VARCHAR was not a known type***, so a flat table refused every string written
+				// to a VARCHAR column as "does not fit the column's type [?]" (2026-09-13).
+				else if ( field.type === MySqlFieldTypes.VAR_STRING )
+				{
+					field.type_name = 'VARCHAR';
 					field.short_type = 's';
 				}
 				else 
@@ -574,11 +622,37 @@ module.exports = {
 		// ***The question is the round trip, not whether the server will accept it.*** MySQL
 		// takes a number into a MEDIUMTEXT column happily and hands back a string, and there is
 		// nothing in the row afterwards which says a number was meant.
+		// ***A value fits only if the column can hold it exactly.*** This compared the short type
+		// alone, so 3.14 fitted an INT: the server stored 3, and under PayloadSync the clause
+		// `(n = 3.14) OR n IS NULL` excluded the row, which FindMany( { n: 3.14 } ) then never
+		// saw - the narrowing the pre-filter invariant forbids (2026-09-13). The same rule
+		// jsonstor-postgres applies: a value which does not fit goes to the payload with a NULL
+		// left in the column to admit it, and a flat table refuses it.
 		function value_fits_column( Field, Value )
 		{
 			let st = jsongin.ShortType( Value );
 			if ( !'bns'.includes( st ) ) { return false; }
-			return ( Field.short_type === st );
+			if ( Field.short_type !== st ) { return false; }
+			if ( st === 'n' )
+			{
+				if ( !Number.isFinite( Value ) ) { return false; }
+				if ( Field.is_integer )
+				{
+					if ( !Number.isInteger( Value ) ) { return false; }
+					let range = INTEGER_RANGES[ Field.type_name ];
+					if ( range )
+					{
+						let low = Field.is_unsigned ? 0 : range.Low;
+						let high = Field.is_unsigned ? range.UnsignedHigh : range.High;
+						if ( ( Value < low ) || ( Value > high ) ) { return false; }
+					}
+				}
+			}
+			if ( st === 's' )
+			{
+				if ( Number.isInteger( Field.max_length ) && ( Value.length > Field.max_length ) ) { return false; }
+			}
+			return true;
 		}
 
 
@@ -662,7 +736,10 @@ module.exports = {
 				{
 					// F2. The column is the only home this field has, so a value it cannot hold
 					// is refused rather than coerced into a lie.
-					throw new Error( `Cannot store the field [${key}], its value does not fit the column's type [${field.type_name}]. Configure a PayloadColumn to store values of any type.` );
+					// The remedy named is the one this configuration lacks: a storage which already has a
+					// payload column refuses here only because PayloadSync is off.
+					let remedy = has_payload ? 'Set PayloadSync to true' : 'Configure a PayloadColumn with PayloadSync true';
+					throw new Error( `Cannot store the field [${key}], its value does not fit the column's type [${field.type_name}]. ${remedy} to store values of any type.` );
 				}
 				row[ key ] = value;
 			}
@@ -781,7 +858,15 @@ module.exports = {
 			for ( let index = 0; index < documents.length; index++ )
 			{
 				let document = row_to_document( documents[ index ] );
-				if ( jsongin.Query( document, translation.Residual ) )
+				// ***A null or undefined residual matches every row.*** It is what a null or
+				// undefined criteria translates to, and both mean every document - but
+				// jsongin.Query refuses either one as a criteria.
+				let matched = true;
+				if ( ( translation.Residual !== null ) && ( typeof translation.Residual !== 'undefined' ) )
+				{
+					matched = jsongin.Query( document, translation.Residual );
+				}
+				if ( matched )
 				{
 					filtered.push( document );
 					if ( MaxDocs && ( filtered.length === MaxDocs ) ) { break; }
@@ -1203,8 +1288,10 @@ module.exports = {
 		//=====================================================================
 
 
-		Storage.InsertMany = async function ( Documents, Options = {} ) 
+		Storage.InsertMany = async function ( Documents, Options = {} )
 		{
+			// Refused rather than read as an empty list, the way every other adapter refuses it.
+			if ( jsongin.ShortType( Documents ) !== 'a' ) { throw new Error( `Documents must be an array of objects.` ); }
 			let documents = [];
 			for ( let index = 0; index < Documents.length; index++ )
 			{
